@@ -9,9 +9,9 @@ import android.os.Handler;
 import android.support.annotation.NonNull;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.MotionEvent;
 
 import com.facebook.react.bridge.LifecycleEventListener;
 import com.facebook.react.bridge.ReactContext;
@@ -27,6 +27,7 @@ import com.mapbox.mapboxsdk.annotations.MarkerViewManager;
 import com.mapbox.mapboxsdk.camera.CameraPosition;
 import com.mapbox.mapboxsdk.camera.CameraUpdate;
 import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
+import com.mapbox.mapboxsdk.exceptions.InvalidLatLngBoundsException;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.geometry.LatLngBounds;
 import com.mapbox.mapboxsdk.geometry.VisibleRegion;
@@ -321,7 +322,7 @@ public class RCTMGLMapView extends MapView implements
         ReactContext reactContext = (ReactContext) mContext;
         reactContext.removeLifecycleEventListener(mLifeCycleListener);
 
-        if(mLocationLayer != null){
+        if (mLocationLayer != null) {
             mLocationLayer.onStop();
         }
 
@@ -987,14 +988,18 @@ public class RCTMGLMapView extends MapView implements
     }
 
     public void getVisibleBounds(String callbackID) {
-        AndroidCallbackEvent event = new AndroidCallbackEvent(this, callbackID, EventKeys.MAP_ANDROID_CALLBACK);
-        VisibleRegion region = mMap.getProjection().getVisibleRegion();
+        try {
+            AndroidCallbackEvent event = new AndroidCallbackEvent(this, callbackID, EventKeys.MAP_ANDROID_CALLBACK);
+            VisibleRegion region = mMap.getProjection().getVisibleRegion();
 
-        WritableMap payload = new WritableNativeMap();
-        payload.putArray("visibleBounds", GeoJSONUtils.fromLatLngBounds(region.latLngBounds));
-        event.setPayload(payload);
+            WritableMap payload = new WritableNativeMap();
+            payload.putArray("visibleBounds", GeoJSONUtils.fromLatLngBounds(region.latLngBounds));
+            event.setPayload(payload);
 
-        mManager.handleEvent(event);
+            mManager.handleEvent(event);
+        } catch (InvalidLatLngBoundsException exception) {
+            // ignore invalid latlng exceptions, was seen happening during component unmounts
+        }
     }
 
     public void getPointInView(String callbackID, LatLng mapCoordinate) {
@@ -1073,22 +1078,22 @@ public class RCTMGLMapView extends MapView implements
         getViewTreeObserver().dispatchOnGlobalLayout();
     }
 
-    public boolean isDestroyed(){
+    public boolean isDestroyed() {
         return mDestroyed;
     }
 
 
     private void updateCenterCoordinateIfNeeded() {
-      if (mMap != null && mVisibleCoordinateBounds != null) {
-        CameraUpdate boundsUpdate = CameraUpdateFactory.newLatLngBounds(mVisibleCoordinateBounds, 0);
-        CameraPosition boundsPosition = boundsUpdate.getCameraPosition(mMap);
-        if (boundsPosition != null) {
-          mCenterCoordinate = Point.fromCoordinates(Position.fromLngLat(
-            boundsPosition.target.getLongitude(), boundsPosition.target.getLatitude()
-          ));
-          mZoomLevel = boundsPosition.zoom;
+        if (mMap != null && mVisibleCoordinateBounds != null) {
+            CameraUpdate boundsUpdate = CameraUpdateFactory.newLatLngBounds(mVisibleCoordinateBounds, 0);
+            CameraPosition boundsPosition = boundsUpdate.getCameraPosition(mMap);
+            if (boundsPosition != null) {
+                mCenterCoordinate = Point.fromCoordinates(Position.fromLngLat(
+                        boundsPosition.target.getLongitude(), boundsPosition.target.getLatitude()
+                ));
+                mZoomLevel = boundsPosition.zoom;
+            }
         }
-      }
     }
 
     private void updateCameraPositionIfNeeded(boolean shouldUpdateTarget) {
@@ -1273,20 +1278,24 @@ public class RCTMGLMapView extends MapView implements
     }
 
     private WritableMap makeRegionPayload() {
-        CameraPosition position = mMap.getCameraPosition();
-        LatLng latLng = new LatLng(position.target.getLatitude(), position.target.getLongitude());
+        try {
+            CameraPosition position = mMap.getCameraPosition();
+            LatLng latLng = new LatLng(position.target.getLatitude(), position.target.getLongitude());
 
-        WritableMap properties = new WritableNativeMap();
-        properties.putDouble("zoomLevel", position.zoom);
-        properties.putDouble("heading", position.bearing);
-        properties.putDouble("pitch", position.tilt);
-        properties.putBoolean("animated", mCameraChangeTracker.isAnimated());
-        properties.putBoolean("isUserInteraction", mCameraChangeTracker.isUserInteraction());
+            WritableMap properties = new WritableNativeMap();
+            properties.putDouble("zoomLevel", position.zoom);
+            properties.putDouble("heading", position.bearing);
+            properties.putDouble("pitch", position.tilt);
+            properties.putBoolean("animated", mCameraChangeTracker.isAnimated());
+            properties.putBoolean("isUserInteraction", mCameraChangeTracker.isUserInteraction());
 
-        VisibleRegion visibleRegion = mMap.getProjection().getVisibleRegion();
-        properties.putArray("visibleBounds", GeoJSONUtils.fromLatLngBounds(visibleRegion.latLngBounds));
+            VisibleRegion visibleRegion = mMap.getProjection().getVisibleRegion();
+            properties.putArray("visibleBounds", GeoJSONUtils.fromLatLngBounds(visibleRegion.latLngBounds));
 
-        return GeoJSONUtils.toPointFeature(latLng, properties);
+            return GeoJSONUtils.toPointFeature(latLng, properties);
+        } catch (InvalidLatLngBoundsException ex) {
+            return null;
+        }
     }
 
     private void removeAllSourcesFromMap() {
@@ -1430,8 +1439,8 @@ public class RCTMGLMapView extends MapView implements
 
             // we want to get the width, and height scaled based on pixel density, that also includes content padding
             // (width * percentOfWidthWeWant - (leftPadding + rightPadding)) / dpi
-            int mapWidth = (int)((mMap.getWidth() * 0.75 - (contentPadding[0] + contentPadding[2])) / metrics.scaledDensity);
-            int mapHeight = (int)((mMap.getHeight() * 0.75 - (contentPadding[1] + contentPadding[3])) / metrics.scaledDensity);
+            int mapWidth = (int) ((mMap.getWidth() * 0.75 - (contentPadding[0] + contentPadding[2])) / metrics.scaledDensity);
+            int mapHeight = (int) ((mMap.getHeight() * 0.75 - (contentPadding[1] + contentPadding[3])) / metrics.scaledDensity);
             VisibleRegion region = GeoViewport.getRegion(center, (int) zoomLevel, mapWidth, mapHeight);
 
             switch (mUserLocationVerticalAlignment) {
@@ -1499,7 +1508,9 @@ public class RCTMGLMapView extends MapView implements
                 event = new MapChangeEvent(this, eventType);
         }
 
-        mManager.handleEvent(event);
+        if (event != null) {
+            mManager.handleEvent(event);
+        }
     }
 
     private boolean canHandleEvent(String event) {
@@ -1511,7 +1522,7 @@ public class RCTMGLMapView extends MapView implements
     }
 
     private void sendUserLocationUpdateEvent(Location location) {
-        if(location == null){
+        if (location == null) {
             return;
         }
         IEvent event = new MapChangeEvent(this, makeLocationChangePayload(location), EventTypes.USER_LOCATION_UPDATED);
@@ -1521,6 +1532,7 @@ public class RCTMGLMapView extends MapView implements
     /**
      * Create a payload of the location data per the web api geolocation spec
      * https://dev.w3.org/geo/api/spec-source.html#position
+     *
      * @return
      */
     private WritableMap makeLocationChangePayload(Location location) {
